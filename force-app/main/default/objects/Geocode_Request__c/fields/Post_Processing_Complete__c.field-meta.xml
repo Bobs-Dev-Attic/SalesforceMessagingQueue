@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Post_Processing_Complete__c</fullName>
+    <label>Post Processing Complete</label>
+    <description>Set by the Geocode Post Processing flow once a matched location has been handled. Also gates the flow so it does not re-trigger.</description>
+    <type>Checkbox</type>
+    <defaultValue>false</defaultValue>
+    <trackHistory>false</trackHistory>
+</CustomField>

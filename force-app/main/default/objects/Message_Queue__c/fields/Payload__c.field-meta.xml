@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Payload__c</fullName>
+    <label>Payload (JSON)</label>
+    <description>JSON instruction set describing the external call: method, endpoint, headers, body, timeout, expected success codes, and the Apex response handler to route to.</description>
+    <type>LongTextArea</type>
+    <length>131072</length>
+    <visibleLines>15</visibleLines>
+    <required>false</required>
+    <trackHistory>false</trackHistory>
+</CustomField>

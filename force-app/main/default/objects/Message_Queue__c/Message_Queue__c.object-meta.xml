@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Durable queue of outbound integration messages. Each record carries a JSON payload describing the external API to call and how to process the response. Drained asynchronously by MessageQueueScheduler / MessageQueueProcessor.</description>
+    <enableActivities>false</enableActivities>
+    <enableBulkApi>true</enableBulkApi>
+    <enableFeeds>false</enableFeeds>
+    <enableHistory>false</enableHistory>
+    <enableReports>true</enableReports>
+    <enableSearch>true</enableSearch>
+    <enableSharing>true</enableSharing>
+    <enableStreamingApi>true</enableStreamingApi>
+    <label>Message Queue</label>
+    <nameField>
+        <displayFormat>MQ-{00000000}</displayFormat>
+        <label>Message Number</label>
+        <type>AutoNumber</type>
+    </nameField>
+    <pluralLabel>Message Queue Items</pluralLabel>
+    <sharingModel>ReadWrite</sharingModel>
+    <visibility>Public</visibility>
+</CustomObject>
