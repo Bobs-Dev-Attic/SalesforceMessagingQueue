@@ -12,6 +12,9 @@
  *
  * On a non-2xx response it leaves message.Status__c as 'Processing' so the queue
  * engine applies its retry/backoff policy to the whole batch.
+ *
+ * Uploaded rows absent from a 2xx response (Census silently omitted them) are
+ * reconciled to 'No_Match' so no uploaded request is left stranded in 'Queued'.
  */
 public with sharing class GeocodeBatchResponseHandler implements MessageQueueResponseHandler {
 
@@ -61,10 +64,55 @@ public with sharing class GeocodeBatchResponseHandler implements MessageQueueRes
             updates.put(reqId, req);
         }
 
+        // Reconcile: any uploaded request whose row was absent from the 2xx response
+        // must still leave 'Queued'. The uploaded CSV (with all Ids in column 0) is in
+        // the message payload. Mark missing ones No_Match so they aren't stranded.
+        for (Id uploadedId : uploadedRequestIds(message)) {
+            if (!updates.containsKey(uploadedId)) {
+                updates.put(uploadedId, new Geocode_Request__c(
+                    Id = uploadedId,
+                    Geocode_Status__c = 'No_Match',
+                    Geocoded_At__c = System.now()));
+            }
+        }
+
         if (!updates.isEmpty()) {
             update updates.values();
         }
         // 2xx: leave message.Status__c as 'Processing' so the engine marks it Completed.
+    }
+
+    /** Ids of every request we uploaded, read from the batch CSV in the message payload. */
+    private Set<Id> uploadedRequestIds(Message_Queue__c message) {
+        Set<Id> ids = new Set<Id>();
+        if (message == null || String.isBlank(message.Payload__c)) {
+            return ids;
+        }
+        try {
+            Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(message.Payload__c);
+            Object mp = raw.get('multipart');
+            if (mp instanceof Map<String, Object>) {
+                String csv = (String) ((Map<String, Object>) mp).get('fileContent');
+                if (csv != null) {
+                    for (String row : csv.split('\n')) {
+                        if (String.isBlank(row)) {
+                            continue;
+                        }
+                        List<String> cols = CsvUtil.parseLine(row.trim());
+                        if (!cols.isEmpty()) {
+                            try {
+                                ids.add((Id) cols[0]);
+                            } catch (Exception ignore) {
+                                // not an Id row
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // unparseable payload -> nothing to reconcile
+        }
+        return ids;
     }
 
     private Decimal toDecimal(Object value) {

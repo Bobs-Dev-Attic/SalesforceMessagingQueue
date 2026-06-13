@@ -140,6 +140,7 @@ public with sharing class GeocodeDispatcher implements Queueable {
      */
     private static void reapFailedBatches() {
         Set<Id> suspectIds = new Set<Id>();
+        // Caps are per-run (not total); rows beyond the cap are drained on subsequent runs.
         for (Message_Queue__c m : [
             SELECT Payload__c FROM Message_Queue__c
             WHERE Is_Batch__c = true AND Status__c = 'Failed'

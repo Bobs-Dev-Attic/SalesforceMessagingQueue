@@ -174,6 +174,35 @@ private class GeocodeBatchTest {
         System.assertEquals(null, out.Location__Latitude__s);
     }
 
+    @IsTest
+    static void batchHandlerReconcilesOmittedRowsAsNoMatch() {
+        Geocode_Request__c inResp = new Geocode_Request__c(
+            Street__c = 'A', City__c = 'B', State__c = 'CC', Zip__c = '11111', Geocode_Status__c = 'Queued');
+        Geocode_Request__c omitted = new Geocode_Request__c(
+            Street__c = 'C', City__c = 'D', State__c = 'EE', Zip__c = '22222', Geocode_Status__c = 'Queued');
+        insert new List<Geocode_Request__c>{ inResp, omitted };
+
+        // The uploaded CSV (in the message payload) contains BOTH ids; the response echoes only inResp.
+        String uploadedCsv = inResp.Id + ',A,B,CC,11111\n' + omitted.Id + ',C,D,EE,22222';
+        Message_Queue__c msg = MessageQueueService.buildBatchMessage(uploadedCsv);
+
+        String respCsv = '"' + inResp.Id + '","A, B, CC, 11111","Match","Exact","A, B, CC, 11111","-77.0,38.0","1","L"';
+        HttpResponse resp = new HttpResponse();
+        resp.setStatusCode(200);
+        resp.setBody(respCsv);
+
+        Test.startTest();
+        new GeocodeBatchResponseHandler().handle(msg, resp);
+        Test.stopTest();
+
+        Map<Id, Geocode_Request__c> byId = new Map<Id, Geocode_Request__c>([
+            SELECT Geocode_Status__c FROM Geocode_Request__c WHERE Id IN :new List<Id>{ inResp.Id, omitted.Id }
+        ]);
+        System.assertEquals('Matched', byId.get(inResp.Id).Geocode_Status__c);
+        System.assertEquals('No_Match', byId.get(omitted.Id).Geocode_Status__c,
+            'Uploaded row omitted from the 2xx response is reconciled to No_Match, not left Queued');
+    }
+
     // ---- Heavy-aware claiming ------------------------------------------
     @IsTest
     static void claimReturnsAtMostOneBatchAndPrefersSingles() {
@@ -304,6 +333,20 @@ private class GeocodeBatchTest {
 
         System.assertEquals(0, [SELECT COUNT() FROM Message_Queue__c],
             'No messages when no Pending requests exist');
+    }
+
+    @IsTest
+    static void safetyNetSchedulerRegistersAndAborts() {
+        Test.startTest();
+        Id jobId = GeocodeDispatcherScheduler.start();
+        Test.stopTest();
+        System.assertNotEquals(null, jobId);
+        System.assertEquals(1, [SELECT COUNT() FROM CronTrigger
+            WHERE CronJobDetail.Name = :GeocodeDispatcherScheduler.JOB_NAME]);
+
+        GeocodeDispatcherScheduler.stop();
+        System.assertEquals(0, [SELECT COUNT() FROM CronTrigger
+            WHERE CronJobDetail.Name = :GeocodeDispatcherScheduler.JOB_NAME]);
     }
 
     @IsTest
