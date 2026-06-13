@@ -90,6 +90,68 @@ private class GeocodeBatchTest {
             'closing boundary malformed: ' + body);
     }
 
+    // ---- GeocodeBatchResponseHandler -----------------------------------
+    @IsTest
+    static void batchHandlerWritesMatchesAndNoMatches() {
+        Geocode_Request__c matched = new Geocode_Request__c(
+            Street__c = '4550 Montgomery Ave', City__c = 'Bethesda',
+            State__c = 'MD', Zip__c = '20814', Geocode_Status__c = 'Queued');
+        Geocode_Request__c missing = new Geocode_Request__c(
+            Street__c = 'Nowhere', City__c = 'X', State__c = 'XX',
+            Zip__c = '00000', Geocode_Status__c = 'Queued');
+        insert new List<Geocode_Request__c>{ matched, missing };
+
+        // Census batch CSV: ID, input, match indicator, match type, matched addr, "lon,lat", tiger, side
+        String csv =
+            '"' + matched.Id + '","4550 Montgomery Ave, Bethesda, MD, 20814","Match","Exact",'
+            + '"4550 MONTGOMERY AVE, BETHESDA, MD, 20814","-77.0916,38.9839","123456","L"\n'
+            + '"' + missing.Id + '","Nowhere, X, XX, 00000","No_Match"';
+
+        HttpResponse resp = new HttpResponse();
+        resp.setStatusCode(200);
+        resp.setBody(csv);
+
+        Message_Queue__c msg = MessageQueueService.buildBatchMessage('irrelevant');
+
+        Test.startTest();
+        new GeocodeBatchResponseHandler().handle(msg, resp);
+        Test.stopTest();
+
+        Map<Id, Geocode_Request__c> byId = new Map<Id, Geocode_Request__c>([
+            SELECT Geocode_Status__c, Matched_Address__c,
+                   Location__Latitude__s, Location__Longitude__s, Geocoded_At__c
+            FROM Geocode_Request__c WHERE Id IN :new List<Id>{ matched.Id, missing.Id }
+        ]);
+
+        Geocode_Request__c m = byId.get(matched.Id);
+        System.assertEquals('Matched', m.Geocode_Status__c);
+        System.assertEquals('4550 MONTGOMERY AVE, BETHESDA, MD, 20814', m.Matched_Address__c);
+        System.assert(Math.abs(m.Location__Latitude__s - 38.9839) < 0.0001, 'latitude (y)');
+        System.assert(Math.abs(m.Location__Longitude__s - (-77.0916)) < 0.0001, 'longitude (x)');
+        System.assertNotEquals(null, m.Geocoded_At__c);
+
+        System.assertEquals('No_Match', byId.get(missing.Id).Geocode_Status__c);
+    }
+
+    @IsTest
+    static void batchHandlerLeavesProcessingOnNon2xx() {
+        Geocode_Request__c r = new Geocode_Request__c(
+            Street__c = 'A', City__c = 'B', State__c = 'CC', Zip__c = '11111',
+            Geocode_Status__c = 'Queued');
+        insert r;
+        HttpResponse resp = new HttpResponse();
+        resp.setStatusCode(500);
+        resp.setBody('error');
+        Message_Queue__c msg = MessageQueueService.buildBatchMessage('x');
+        msg.Status__c = 'Processing';
+
+        new GeocodeBatchResponseHandler().handle(msg, resp);
+
+        System.assertEquals('Processing', msg.Status__c, 'Non-2xx must leave Processing for retry');
+        System.assertEquals('Queued',
+            [SELECT Geocode_Status__c FROM Geocode_Request__c WHERE Id = :r.Id].Geocode_Status__c);
+    }
+
     // ---- Heavy-aware claiming ------------------------------------------
     @IsTest
     static void claimReturnsAtMostOneBatchAndPrefersSingles() {
