@@ -29,4 +29,11 @@ private class GeocodeBatchTest {
         System.assertEquals('', cols[1]);
         System.assertEquals('he said "hi"', cols[2]);
     }
+
+    @IsTest
+    static void csvParserKeepsTrailingEmptyField() {
+        List<String> cols = CsvUtil.parseLine('a,b,');
+        System.assertEquals(3, cols.size(), 'Trailing comma yields a trailing empty field');
+        System.assertEquals('', cols[2]);
+    }
 }

@@ -28,6 +28,7 @@ public with sharing class CsvUtil {
                     current += c;
                 }
             } else if (c == '"') {
+                // an unquoted " opens quote mode; RFC 4180 forbids it mid-field, but we tolerate it
                 inQuotes = true;
             } else if (c == ',') {
                 result.add(current);
