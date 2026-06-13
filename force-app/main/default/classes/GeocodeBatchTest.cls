@@ -89,4 +89,29 @@ private class GeocodeBatchTest {
         System.assert(body.endsWith('--' + boundary + '--\r\n'),
             'closing boundary malformed: ' + body);
     }
+
+    // ---- Heavy-aware claiming ------------------------------------------
+    @IsTest
+    static void claimReturnsAtMostOneBatchAndPrefersSingles() {
+        // Two batch messages and one single message, all eligible now.
+        Message_Queue__c b1 = MessageQueueService.buildBatchMessage('001000000000001AAA,a,b,c,d');
+        Message_Queue__c b2 = MessageQueueService.buildBatchMessage('001000000000002AAA,a,b,c,d');
+        Message_Queue__c single = MessageQueueService.buildMessage(
+            'GET', 'https://example.com', null, null, null, null);
+        insert new List<Message_Queue__c>{ b1, b2, single };
+
+        Test.startTest();
+        List<Message_Queue__c> first = MessageQueueService.claimPending(100);
+        Test.stopTest();
+
+        // Singles are claimed first, in bulk; batch messages are not mixed in.
+        System.assertEquals(1, first.size(), 'Single message claimed first, batches deferred');
+        System.assertEquals(single.Id, first[0].Id);
+
+        // Next claim returns exactly one batch (heavy work one-at-a-time).
+        List<Message_Queue__c> second = MessageQueueService.claimPending(100);
+        System.assertEquals(1, second.size(), 'At most one batch message per claim');
+        System.assertEquals(true,
+            [SELECT Is_Batch__c FROM Message_Queue__c WHERE Id = :second[0].Id].Is_Batch__c);
+    }
 }

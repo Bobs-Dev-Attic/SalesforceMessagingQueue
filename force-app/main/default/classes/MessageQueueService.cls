@@ -133,12 +133,21 @@ public with sharing class MessageQueueService {
     // ---------------------------------------------------------------------
 
     /**
-     * Atomically move up to limitSize eligible messages to 'Processing' and return
-     * them. FOR UPDATE row-locking prevents two overlapping scheduler ticks from
-     * grabbing the same rows. Runs in the (synchronous) scheduler transaction with
-     * no callouts, so the lock is held only briefly.
+     * Claim eligible messages for one processor execution. Cheap single-callout
+     * messages are claimed in bulk and drained first; "heavy" batch messages
+     * (Is_Batch__c = true) are claimed at most one at a time, because Salesforce
+     * caps cumulative callout time at 120s per transaction and each batch callout
+     * is slow. The processor chains, so successive executions drain the rest.
      */
     public static List<Message_Queue__c> claimPending(Integer limitSize) {
+        List<Message_Queue__c> singles = claimEligible(false, limitSize);
+        if (!singles.isEmpty()) {
+            return singles;
+        }
+        return claimEligible(true, 1);
+    }
+
+    private static List<Message_Queue__c> claimEligible(Boolean isBatch, Integer limitSize) {
         Datetime now = System.now();
         // SOQL forbids ORDER BY together with FOR UPDATE (lock order is implied by Id).
         // Two-step claim: (1) pick the highest-priority eligible rows in order, then
@@ -147,6 +156,7 @@ public with sharing class MessageQueueService {
             SELECT Id
             FROM Message_Queue__c
             WHERE Status__c IN ('Pending', 'Retry')
+              AND Is_Batch__c = :isBatch
               AND (Scheduled_At__c = null OR Scheduled_At__c <= :now)
               AND (Next_Attempt_At__c = null OR Next_Attempt_At__c <= :now)
             ORDER BY Priority__c ASC NULLS LAST, Scheduled_At__c ASC NULLS FIRST, CreatedDate ASC
