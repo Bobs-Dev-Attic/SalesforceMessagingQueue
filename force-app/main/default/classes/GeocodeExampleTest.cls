@@ -14,13 +14,17 @@ private class GeocodeExampleTest {
     private static final String NO_MATCH_BODY = '{"result":{"addressMatches":[]}}';
 
     private static Geocode_Request__c insertRequest() {
+        // Suppress the trigger's async auto-enqueue and dispatch synchronously so
+        // the test observes the resulting message deterministically.
+        GeocodeDispatcher.dispatchQueued = true;
         Geocode_Request__c req = new Geocode_Request__c(
             Street__c = '1600 Pennsylvania Ave NW',
             City__c = 'Washington',
             State__c = 'DC',
             Zip__c = '20500'
         );
-        insert req; // after-insert trigger enqueues the Census message
+        insert req;
+        GeocodeDispatcher.dispatch(); // 1 pending -> single GET message
         return req;
     }
 

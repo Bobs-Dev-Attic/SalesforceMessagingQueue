@@ -20,6 +20,8 @@ public with sharing class MessageQueueService {
     @TestVisible private static final Integer DEFAULT_TIMEOUT_MS = 30000;
     @TestVisible private static final Integer MAX_TEXT_AREA = 131072;
     @TestVisible private static final Integer MAX_ERROR_LEN = 32768;
+    @TestVisible private static final String CENSUS_BATCH_ENDPOINT =
+        'https://geocoding.geo.census.gov/geocoder/locations/addressbatch';
 
     /**
      * Typed view of the JSON instruction stored in Message_Queue__c.Payload__c.
@@ -43,6 +45,15 @@ public with sharing class MessageQueueService {
         public Integer timeout;                // optional; ms (1 - 120000)
         public List<Integer> successStatusCodes; // optional; defaults to 2xx
         public String responseHandler;         // optional; Apex class implementing MessageQueueResponseHandler
+        public MultipartUpload multipart;      // optional; multipart/form-data file upload
+    }
+
+    /** Describes a single multipart/form-data file upload plus accompanying form fields. */
+    public class MultipartUpload {
+        public String fileFieldName;            // e.g. "addressFile"
+        public String fileName;                 // e.g. "addresses.csv"
+        public String fileContent;              // the file body (text)
+        public Map<String, String> formFields;  // additional form-data fields, e.g. benchmark
     }
 
     // ---------------------------------------------------------------------
@@ -87,17 +98,56 @@ public with sharing class MessageQueueService {
         return buildMessage(payload, relatedRecordId, null);
     }
 
+    /**
+     * Build (but do not insert) a batch message: a single POST that uploads a CSV
+     * of up to ~1,000 addresses to the Census addressbatch geocoder as
+     * multipart/form-data. The CSV's first column is the Geocode_Request__c Id,
+     * which the response echoes back so results map straight to the records.
+     */
+    public static Message_Queue__c buildBatchMessage(String csv) {
+        MessagePayload payload = new MessagePayload();
+        payload.method = 'POST';
+        payload.endpoint = CENSUS_BATCH_ENDPOINT;
+        payload.timeout = 120000;               // batch geocoding is slow; use the max
+        payload.responseHandler = 'GeocodeBatchResponseHandler';
+
+        MultipartUpload mu = new MultipartUpload();
+        mu.fileFieldName = 'addressFile';
+        mu.fileName = 'addresses.csv';
+        mu.fileContent = csv;
+        mu.formFields = new Map<String, String>{ 'benchmark' => 'Public_AR_Current' };
+        payload.multipart = mu;
+
+        return new Message_Queue__c(
+            Payload__c = JSON.serialize(payload, true),
+            HTTP_Method__c = 'POST',
+            Endpoint__c = payload.endpoint.abbreviate(255),
+            Response_Handler__c = 'GeocodeBatchResponseHandler',
+            Is_Batch__c = true,
+            Status__c = 'Pending'
+        );
+    }
+
     // ---------------------------------------------------------------------
     // Claiming work
     // ---------------------------------------------------------------------
 
     /**
-     * Atomically move up to limitSize eligible messages to 'Processing' and return
-     * them. FOR UPDATE row-locking prevents two overlapping scheduler ticks from
-     * grabbing the same rows. Runs in the (synchronous) scheduler transaction with
-     * no callouts, so the lock is held only briefly.
+     * Claim eligible messages for one processor execution. Cheap single-callout
+     * messages are claimed in bulk and drained first; "heavy" batch messages
+     * (Is_Batch__c = true) are claimed at most one at a time, because Salesforce
+     * caps cumulative callout time at 120s per transaction and each batch callout
+     * is slow. The processor chains, so successive executions drain the rest.
      */
     public static List<Message_Queue__c> claimPending(Integer limitSize) {
+        List<Message_Queue__c> singles = claimEligible(false, limitSize);
+        if (!singles.isEmpty()) {
+            return singles;
+        }
+        return claimEligible(true, 1);
+    }
+
+    private static List<Message_Queue__c> claimEligible(Boolean isBatch, Integer limitSize) {
         Datetime now = System.now();
         // SOQL forbids ORDER BY together with FOR UPDATE (lock order is implied by Id).
         // Two-step claim: (1) pick the highest-priority eligible rows in order, then
@@ -106,6 +156,7 @@ public with sharing class MessageQueueService {
             SELECT Id
             FROM Message_Queue__c
             WHERE Status__c IN ('Pending', 'Retry')
+              AND Is_Batch__c = :isBatch
               AND (Scheduled_At__c = null OR Scheduled_At__c <= :now)
               AND (Next_Attempt_At__c = null OR Next_Attempt_At__c <= :now)
             ORDER BY Priority__c ASC NULLS LAST, Scheduled_At__c ASC NULLS FIRST, CreatedDate ASC
@@ -150,9 +201,15 @@ public with sharing class MessageQueueService {
             }
         }
 
-        String body = bodyToString(payload.body);
-        if (String.isNotBlank(body) && payload.method != 'GET' && payload.method != 'DELETE') {
-            request.setBody(body);
+        if (payload.multipart != null) {
+            String boundary = '----MessageQueueBoundary7MA4YWxkTrZu0gW';
+            request.setHeader('Content-Type', 'multipart/form-data; boundary=' + boundary);
+            request.setBodyAsBlob(Blob.valueOf(buildMultipartBody(payload.multipart, boundary)));
+        } else {
+            String body = bodyToString(payload.body);
+            if (String.isNotBlank(body) && payload.method != 'GET' && payload.method != 'DELETE') {
+                request.setBody(body);
+            }
         }
 
         return new Http().send(request);
@@ -259,6 +316,21 @@ public with sharing class MessageQueueService {
                 payload.successStatusCodes.add(((Decimal) code).intValue());
             }
         }
+        if (raw.get('multipart') instanceof Map<String, Object>) {
+            Map<String, Object> mp = (Map<String, Object>) raw.get('multipart');
+            MultipartUpload mu = new MultipartUpload();
+            mu.fileFieldName = (String) mp.get('fileFieldName');
+            mu.fileName = (String) mp.get('fileName');
+            mu.fileContent = (String) mp.get('fileContent');
+            if (mp.get('formFields') instanceof Map<String, Object>) {
+                mu.formFields = new Map<String, String>();
+                Map<String, Object> ff = (Map<String, Object>) mp.get('formFields');
+                for (String k : ff.keySet()) {
+                    mu.formFields.put(k, String.valueOf(ff.get(k)));
+                }
+            }
+            payload.multipart = mu;
+        }
 
         if (String.isBlank(payload.endpoint)) {
             throw new MessageQueueException('Message ' + message.Id + ' payload is missing "endpoint".');
@@ -310,5 +382,30 @@ public with sharing class MessageQueueService {
             return null;
         }
         return value.length() <= maxLen ? value : value.abbreviate(maxLen);
+    }
+
+    /**
+     * Assemble a multipart/form-data body as text. The file content here is text
+     * (CSV), so a plain string body is sufficient; no base64 byte-alignment is
+     * needed (that trick only matters when embedding binary file parts).
+     */
+    @TestVisible
+    private static String buildMultipartBody(MultipartUpload mu, String boundary) {
+        String CRLF = '\r\n';
+        String body = '';
+        if (mu.formFields != null) {
+            for (String name : mu.formFields.keySet()) {
+                body += '--' + boundary + CRLF;
+                body += 'Content-Disposition: form-data; name="' + name + '"' + CRLF + CRLF;
+                body += mu.formFields.get(name) + CRLF;
+            }
+        }
+        body += '--' + boundary + CRLF;
+        body += 'Content-Disposition: form-data; name="' + mu.fileFieldName
+              + '"; filename="' + mu.fileName + '"' + CRLF;
+        body += 'Content-Type: text/csv' + CRLF + CRLF;
+        body += (mu.fileContent == null ? '' : mu.fileContent) + CRLF;
+        body += '--' + boundary + '--' + CRLF;
+        return body;
     }
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Is_Batch__c</fullName>
+    <label>Is Batch</label>
+    <description>True when this message carries a batch of records in one callout (e.g. a Census addressbatch CSV upload). The engine processes at most one batch message per execution.</description>
+    <type>Checkbox</type>
+    <defaultValue>false</defaultValue>
+    <trackHistory>false</trackHistory>
+</CustomField>
