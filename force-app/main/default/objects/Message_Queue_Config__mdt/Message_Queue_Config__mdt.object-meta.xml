@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Admin-configurable defaults for the message queue (e.g. the default deduplication window).</description>
+    <label>Message Queue Config</label>
+    <pluralLabel>Message Queue Configs</pluralLabel>
+    <visibility>Public</visibility>
+</CustomObject>

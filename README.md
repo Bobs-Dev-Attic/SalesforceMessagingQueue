@@ -62,9 +62,31 @@ A `Message_Queue_Admin` permission set grants full access to the object and engi
   "body": { "salesforceId": "001...", "name": "Acme" },     // string sent as-is, else JSON-serialized
   "timeout": 20000,                                          // ms (optional)
   "successStatusCodes": [200, 201, 202],                     // optional; default 2xx
-  "responseHandler": "AccountSyncResponseHandler"            // optional Apex class
+  "responseHandler": "AccountSyncResponseHandler",           // optional Apex class
+  "dedupSeconds": 600,                                       // optional; overrides the dedup window (0 disables)
+  "dedupKey": "account-sync-001ABC"                          // optional; explicit dedup key
 }
 ```
+
+## Deduplication
+
+`MessageQueueService.enqueue()` suppresses a message when an equivalent one was
+enqueued within a configurable window (and de-dupes identical messages inside one
+batch). "Equivalent" is decided by **`Dedup_Key__c`** — the payload's `dedupKey` if
+supplied, otherwise a SHA-256 hash of `method + endpoint + body`. Only non-terminal
+or recently-completed messages block a duplicate; a prior `Failed`/`Cancelled`
+message never does.
+
+The window is resolved per message:
+
+| Source | Effect |
+|--------|--------|
+| Payload `"dedupSeconds": N` (N > 0) | Use an N-second window — **forces dedup on** even if globally disabled |
+| Payload `"dedupSeconds": 0` | **Disables** dedup for this message |
+| (omitted) | Falls back to `Message_Queue_Config__mdt.Default` → `Default_Dedup_Window_Seconds__c` (ships at 300s) and the `Dedup_Enabled__c` master switch |
+
+`enqueue()` returns an `EnqueueResult` (`inserted` / `skipped`) so producers can
+tell what was suppressed. The example triggers already route through it.
 
 ## Apex components
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Dedup_Key__c</fullName>
+    <label>Dedup Key</label>
+    <description>Deduplication key: the payload's "dedupKey" if supplied, otherwise a SHA-256 hash of method + endpoint + body. Indexed (External Id) so enqueue() can match recent duplicates quickly.</description>
+    <type>Text</type>
+    <length>255</length>
+    <externalId>true</externalId>
+    <unique>false</unique>
+    <caseSensitive>false</caseSensitive>
+    <required>false</required>
+    <trackHistory>false</trackHistory>
+</CustomField>

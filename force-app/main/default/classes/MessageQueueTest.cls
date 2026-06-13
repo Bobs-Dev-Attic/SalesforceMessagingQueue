@@ -166,6 +166,99 @@ private class MessageQueueTest {
         System.assert(msgs[0].Payload__c.contains('accounts'), 'Endpoint should be in payload');
     }
 
+    // ---- Deduplication ---------------------------------------------------
+
+    @IsTest
+    static void enqueueSuppressesDuplicateWithinWindow() {
+        MessageQueueService.dedupEnabledOverride = true;
+        MessageQueueService.dedupWindowOverride = 300;
+
+        MessageQueueService.EnqueueResult first = MessageQueueService.enqueue(
+            new List<Message_Queue__c>{ newPending('callout:X/dup', null, 3) }
+        );
+        MessageQueueService.EnqueueResult second = MessageQueueService.enqueue(
+            new List<Message_Queue__c>{ newPending('callout:X/dup', null, 3) }
+        );
+
+        System.assertEquals(1, first.inserted.size());
+        System.assertEquals(0, first.skipped.size());
+        System.assertEquals(0, second.inserted.size(), 'Second identical call should be suppressed');
+        System.assertEquals(1, second.skipped.size());
+        System.assertEquals(1, [SELECT COUNT() FROM Message_Queue__c]);
+    }
+
+    @IsTest
+    static void enqueueDedupesWithinSingleBatch() {
+        MessageQueueService.dedupEnabledOverride = true;
+        MessageQueueService.dedupWindowOverride = 300;
+
+        MessageQueueService.EnqueueResult result = MessageQueueService.enqueue(new List<Message_Queue__c>{
+            newPending('callout:X/batch', null, 3),
+            newPending('callout:X/batch', null, 3)
+        });
+
+        System.assertEquals(1, result.inserted.size(), 'Only one of two identical messages inserts');
+        System.assertEquals(1, result.skipped.size());
+    }
+
+    @IsTest
+    static void jsonDedupSecondsZeroDisablesDedup() {
+        MessageQueueService.dedupEnabledOverride = true;
+        MessageQueueService.dedupWindowOverride = 300;
+
+        // dedupSeconds = 0 in the payload overrides the global window and turns dedup off,
+        // so two otherwise-identical calls both get inserted.
+        MessageQueueService.enqueue(buildWithDedupSeconds('callout:X/off', 0));
+        MessageQueueService.EnqueueResult second =
+            MessageQueueService.enqueue(buildWithDedupSeconds('callout:X/off', 0));
+
+        System.assertEquals(1, second.inserted.size(), 'dedupSeconds=0 should disable dedup');
+        System.assertEquals(0, second.skipped.size());
+        System.assertEquals(2, [SELECT COUNT() FROM Message_Queue__c]);
+    }
+
+    @IsTest
+    static void jsonDedupSecondsForcesDedupWhenGloballyDisabled() {
+        MessageQueueService.dedupEnabledOverride = false; // globally off
+        MessageQueueService.dedupWindowOverride = 0;
+
+        MessageQueueService.MessagePayload p1 = new MessageQueueService.MessagePayload();
+        p1.method = 'POST'; p1.endpoint = 'callout:X/force'; p1.dedupSeconds = 300;
+        MessageQueueService.MessagePayload p2 = new MessageQueueService.MessagePayload();
+        p2.method = 'POST'; p2.endpoint = 'callout:X/force'; p2.dedupSeconds = 300;
+
+        MessageQueueService.enqueue(MessageQueueService.buildMessage(p1, null, null));
+        MessageQueueService.EnqueueResult second =
+            MessageQueueService.enqueue(MessageQueueService.buildMessage(p2, null, null));
+
+        System.assertEquals(0, second.inserted.size(), 'Payload override should force dedup on');
+        System.assertEquals(1, second.skipped.size());
+    }
+
+    @IsTest
+    static void failedMessageDoesNotBlockReenqueue() {
+        MessageQueueService.dedupEnabledOverride = true;
+        MessageQueueService.dedupWindowOverride = 300;
+
+        Message_Queue__c original = newPending('callout:X/failed', null, 3);
+        MessageQueueService.enqueue(new List<Message_Queue__c>{ original });
+        original.Status__c = 'Failed';
+        update original;
+
+        MessageQueueService.EnqueueResult retry = MessageQueueService.enqueue(
+            new List<Message_Queue__c>{ newPending('callout:X/failed', null, 3) }
+        );
+        System.assertEquals(1, retry.inserted.size(), 'A failed prior call must not block a fresh enqueue');
+    }
+
+    private static Message_Queue__c buildWithDedupSeconds(String endpoint, Integer seconds) {
+        MessageQueueService.MessagePayload p = new MessageQueueService.MessagePayload();
+        p.method = 'POST';
+        p.endpoint = endpoint;
+        p.dedupSeconds = seconds;
+        return MessageQueueService.buildMessage(p, null, null);
+    }
+
     // ---- Scheduler registration -----------------------------------------
 
     @IsTest

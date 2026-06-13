@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Dedup_Enabled__c</fullName>
+    <label>Dedup Enabled</label>
+    <description>Master switch for windowed deduplication. A per-message "dedupSeconds" override always wins over this flag.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <type>Checkbox</type>
+    <defaultValue>true</defaultValue>
+</CustomField>

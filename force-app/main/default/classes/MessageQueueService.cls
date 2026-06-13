@@ -21,6 +21,18 @@ public with sharing class MessageQueueService {
     @TestVisible private static final Integer MAX_TEXT_AREA = 131072;
     @TestVisible private static final Integer MAX_ERROR_LEN = 32768;
 
+    // Fallback dedup config when no Message_Queue_Config__mdt.Default record exists.
+    @TestVisible private static final Integer FALLBACK_DEDUP_WINDOW_SECONDS = 300;
+
+    // Statuses that still count as an active/recent call for dedup purposes. Failed
+    // and Cancelled messages do NOT suppress a fresh enqueue.
+    private static final Set<String> DEDUP_BLOCKING_STATUSES =
+        new Set<String>{ 'Pending', 'Processing', 'Retry', 'Completed' };
+
+    // Test hooks so dedup behaviour can be exercised without editing the CMDT record.
+    @TestVisible private static Boolean dedupEnabledOverride;
+    @TestVisible private static Integer dedupWindowOverride;
+
     /**
      * Typed view of the JSON instruction stored in Message_Queue__c.Payload__c.
      *
@@ -43,6 +55,8 @@ public with sharing class MessageQueueService {
         public Integer timeout;                // optional; ms (1 - 120000)
         public List<Integer> successStatusCodes; // optional; defaults to 2xx
         public String responseHandler;         // optional; Apex class implementing MessageQueueResponseHandler
+        public Integer dedupSeconds;           // optional; overrides the dedup window. 0 disables dedup; >0 forces it on
+        public String dedupKey;                // optional; explicit dedup key (else a hash of method+endpoint+body)
     }
 
     // ---------------------------------------------------------------------
@@ -85,6 +99,102 @@ public with sharing class MessageQueueService {
         payload.headers = headers;
         payload.responseHandler = responseHandler;
         return buildMessage(payload, relatedRecordId, null);
+    }
+
+    // ---------------------------------------------------------------------
+    // Enqueue with windowed deduplication
+    // ---------------------------------------------------------------------
+
+    /** Outcome of an enqueue: which messages were inserted and which were suppressed as duplicates. */
+    public class EnqueueResult {
+        public List<Message_Queue__c> inserted = new List<Message_Queue__c>();
+        public List<Message_Queue__c> skipped = new List<Message_Queue__c>();
+    }
+
+    /** Convenience single-record overload. */
+    public static EnqueueResult enqueue(Message_Queue__c message) {
+        return enqueue(new List<Message_Queue__c>{ message });
+    }
+
+    /**
+     * Insert messages, silently suppressing any whose dedup key matches a
+     * non-failed message enqueued within the configured window (and de-duping
+     * identical messages within this same batch). Bulk-safe: one query, one insert.
+     *
+     * Window resolution per message: the payload's "dedupSeconds" wins (0 disables,
+     * >0 forces on); otherwise the Message_Queue_Config__mdt default applies.
+     */
+    public static EnqueueResult enqueue(List<Message_Queue__c> messages) {
+        EnqueueResult result = new EnqueueResult();
+        if (messages == null || messages.isEmpty()) {
+            return result;
+        }
+
+        // Resolve dedup config; split into "always insert" vs dedup candidates.
+        // NOTE: parallel lists (not an SObject-keyed map) because Apex treats
+        // field-identical SObjects as equal map keys, which would drop messages.
+        List<Message_Queue__c> candidates = new List<Message_Queue__c>();
+        List<Integer> candidateWindows = new List<Integer>();
+        Set<String> keys = new Set<String>();
+        Integer maxWindow = 0;
+        for (Message_Queue__c message : messages) {
+            DedupConfig cfg = resolveDedup(message);
+            if (!cfg.enabled) {
+                result.inserted.add(message); // dedup off for this message
+                continue;
+            }
+            message.Dedup_Key__c = cfg.key;
+            message.Dedup_Window_Seconds__c = cfg.windowSeconds;
+            candidates.add(message);
+            candidateWindows.add(cfg.windowSeconds);
+            keys.add(cfg.key);
+            maxWindow = Math.max(maxWindow, cfg.windowSeconds);
+        }
+
+        // Most-recent blocking message per key within the widest window in play.
+        Map<String, Datetime> latestByKey = new Map<String, Datetime>();
+        if (!keys.isEmpty()) {
+            Datetime earliest = System.now().addSeconds(-maxWindow);
+            for (Message_Queue__c existing : [
+                SELECT Dedup_Key__c, CreatedDate
+                FROM Message_Queue__c
+                WHERE Dedup_Key__c IN :keys
+                  AND Status__c IN :DEDUP_BLOCKING_STATUSES
+                  AND CreatedDate >= :earliest
+                ORDER BY CreatedDate DESC
+            ]) {
+                if (!latestByKey.containsKey(existing.Dedup_Key__c)) {
+                    latestByKey.put(existing.Dedup_Key__c, existing.CreatedDate);
+                }
+            }
+        }
+
+        // Evaluate each candidate against the DB and against earlier rows in this batch.
+        Datetime now = System.now();
+        Set<String> seenInBatch = new Set<String>();
+        for (Integer i = 0; i < candidates.size(); i++) {
+            Message_Queue__c message = candidates[i];
+            Datetime threshold = now.addSeconds(-candidateWindows[i]);
+            Datetime existingWhen = latestByKey.get(message.Dedup_Key__c);
+            Boolean duplicate = seenInBatch.contains(message.Dedup_Key__c)
+                || (existingWhen != null && existingWhen >= threshold);
+            if (duplicate) {
+                result.skipped.add(message);
+            } else {
+                seenInBatch.add(message.Dedup_Key__c);
+                result.inserted.add(message);
+            }
+        }
+
+        if (!result.inserted.isEmpty()) {
+            insert result.inserted;
+        }
+        return result;
+    }
+
+    /** Public so the trigger can stamp a dedup key on directly-inserted messages. */
+    public static String computeDedupKey(Message_Queue__c message) {
+        return resolveDedup(message).key;
     }
 
     // ---------------------------------------------------------------------
@@ -209,6 +319,54 @@ public with sharing class MessageQueueService {
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
+
+    private class DedupConfig {
+        Boolean enabled;
+        String key;
+        Integer windowSeconds;
+    }
+
+    /** Derive the dedup key, window, and on/off state for a message from its payload + config. */
+    private static DedupConfig resolveDedup(Message_Queue__c message) {
+        MessagePayload payload = parsePayload(message);
+        DedupConfig cfg = new DedupConfig();
+
+        // Key: explicit override, else SHA-256 of the call's identifying parts.
+        if (String.isNotBlank(payload.dedupKey)) {
+            cfg.key = payload.dedupKey.abbreviate(255);
+        } else {
+            String raw = payload.method + '|' + payload.endpoint + '|' + bodyToString(payload.body);
+            cfg.key = EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256', Blob.valueOf(raw)));
+        }
+
+        // Window: per-message override wins (0 disables, >0 forces on); else config default.
+        if (payload.dedupSeconds != null) {
+            cfg.windowSeconds = payload.dedupSeconds;
+            cfg.enabled = payload.dedupSeconds > 0;
+        } else {
+            cfg.windowSeconds = defaultDedupWindowSeconds();
+            cfg.enabled = globalDedupEnabled() && cfg.windowSeconds > 0;
+        }
+        return cfg;
+    }
+
+    private static Boolean globalDedupEnabled() {
+        if (dedupEnabledOverride != null) {
+            return dedupEnabledOverride;
+        }
+        Message_Queue_Config__mdt config = Message_Queue_Config__mdt.getInstance('Default');
+        return config == null ? true : config.Dedup_Enabled__c;
+    }
+
+    private static Integer defaultDedupWindowSeconds() {
+        if (dedupWindowOverride != null) {
+            return dedupWindowOverride;
+        }
+        Message_Queue_Config__mdt config = Message_Queue_Config__mdt.getInstance('Default');
+        return (config != null && config.Default_Dedup_Window_Seconds__c != null)
+            ? config.Default_Dedup_Window_Seconds__c.intValue()
+            : FALLBACK_DEDUP_WINDOW_SECONDS;
+    }
 
     @TestVisible
     private static MessagePayload parsePayload(Message_Queue__c message) {

@@ -42,6 +42,7 @@ trigger AccountToMessageQueueTrigger on Account (after insert, after update) {
     }
 
     if (!messages.isEmpty()) {
-        insert messages;
+        // enqueue() applies windowed deduplication before inserting.
+        MessageQueueService.enqueue(messages);
     }
 }

@@ -87,6 +87,16 @@
         <readable>true</readable>
         <editable>true</editable>
     </fieldPermissions>
+    <fieldPermissions>
+        <field>Message_Queue__c.Dedup_Key__c</field>
+        <readable>true</readable>
+        <editable>true</editable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <field>Message_Queue__c.Dedup_Window_Seconds__c</field>
+        <readable>true</readable>
+        <editable>true</editable>
+    </fieldPermissions>
     <classAccesses>
         <apexClass>MessageQueueService</apexClass>
         <enabled>true</enabled>

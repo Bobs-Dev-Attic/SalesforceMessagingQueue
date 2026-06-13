@@ -39,6 +39,15 @@ public with sharing class MessageQueueTriggerHandler {
         if (message.Scheduled_At__c == null) {
             message.Scheduled_At__c = System.now();
         }
+        // Stamp a dedup key so every message is matchable later, even if it was
+        // inserted directly rather than through MessageQueueService.enqueue().
+        if (String.isBlank(message.Dedup_Key__c) && String.isNotBlank(message.Payload__c)) {
+            try {
+                message.Dedup_Key__c = MessageQueueService.computeDedupKey(message);
+            } catch (Exception e) {
+                // Invalid payload is surfaced by validate(); skip key stamping here.
+            }
+        }
     }
 
     private static void validate(Message_Queue__c message) {

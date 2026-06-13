@@ -49,6 +49,7 @@ trigger GeocodeRequestTrigger on Geocode_Request__c (after insert) {
     }
 
     if (!messages.isEmpty()) {
-        insert messages;
+        // enqueue() applies windowed deduplication before inserting.
+        MessageQueueService.enqueue(messages);
     }
 }
