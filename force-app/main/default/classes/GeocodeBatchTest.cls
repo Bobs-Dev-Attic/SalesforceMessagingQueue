@@ -102,14 +102,14 @@ private class GeocodeBatchTest {
 
         Test.startTest();
         List<Message_Queue__c> first = MessageQueueService.claimPending(100);
+        // Next claim (same transaction) returns exactly one batch (heavy work one-at-a-time).
+        List<Message_Queue__c> second = MessageQueueService.claimPending(100);
         Test.stopTest();
 
         // Singles are claimed first, in bulk; batch messages are not mixed in.
         System.assertEquals(1, first.size(), 'Single message claimed first, batches deferred');
         System.assertEquals(single.Id, first[0].Id);
 
-        // Next claim returns exactly one batch (heavy work one-at-a-time).
-        List<Message_Queue__c> second = MessageQueueService.claimPending(100);
         System.assertEquals(1, second.size(), 'At most one batch message per claim');
         System.assertEquals(true,
             [SELECT Is_Batch__c FROM Message_Queue__c WHERE Id = :second[0].Id].Is_Batch__c);
