@@ -256,9 +256,8 @@ Add to `GeocodeBatchTest`:
     // ---- buildBatchMessage + multipart payload --------------------------
     @IsTest
     static void buildBatchMessageProducesMultipartPayload() {
-        List<Id> ids = new List<Id>{ '001000000000001AAA', '001000000000002AAA' };
         String csv = '001000000000001AAA,4550 Montgomery Ave,Bethesda,MD,20814';
-        Message_Queue__c m = MessageQueueService.buildBatchMessage(ids, csv);
+        Message_Queue__c m = MessageQueueService.buildBatchMessage(csv);
 
         System.assertEquals('POST', m.HTTP_Method__c);
         System.assertEquals(true, m.Is_Batch__c, 'Batch messages must be flagged');
@@ -271,9 +270,8 @@ Add to `GeocodeBatchTest`:
 
     @IsTest
     static void multipartPayloadRoundTripsThroughParse() {
-        List<Id> ids = new List<Id>{ '001000000000001AAA' };
         String csv = '001000000000001AAA,4550 Montgomery Ave,Bethesda,MD,20814';
-        Message_Queue__c m = MessageQueueService.buildBatchMessage(ids, csv);
+        Message_Queue__c m = MessageQueueService.buildBatchMessage(csv);
 
         MessageQueueService.MessagePayload p = MessageQueueService.parsePayload(m);
         System.assertNotEquals(null, p.multipart, 'multipart block should survive serialize/parse');
@@ -347,7 +345,7 @@ Add these methods in the "Enqueue helpers" section (after the existing `buildMes
      * multipart/form-data. The CSV's first column is the Geocode_Request__c Id,
      * which the response echoes back so results map straight to the records.
      */
-    public static Message_Queue__c buildBatchMessage(List<Id> requestIds, String csv) {
+    public static Message_Queue__c buildBatchMessage(String csv) {
         MessagePayload payload = new MessagePayload();
         payload.method = 'POST';
         payload.endpoint = CENSUS_BATCH_ENDPOINT;
@@ -460,10 +458,8 @@ Add to `GeocodeBatchTest`:
     @IsTest
     static void claimReturnsAtMostOneBatchAndPrefersSingles() {
         // Two batch messages and one single message, all eligible now.
-        Message_Queue__c b1 = MessageQueueService.buildBatchMessage(
-            new List<Id>{ '001000000000001AAA' }, '001000000000001AAA,a,b,c,d');
-        Message_Queue__c b2 = MessageQueueService.buildBatchMessage(
-            new List<Id>{ '001000000000002AAA' }, '001000000000002AAA,a,b,c,d');
+        Message_Queue__c b1 = MessageQueueService.buildBatchMessage('001000000000001AAA,a,b,c,d');
+        Message_Queue__c b2 = MessageQueueService.buildBatchMessage('001000000000002AAA,a,b,c,d');
         Message_Queue__c single = MessageQueueService.buildMessage(
             'GET', 'https://example.com', null, null, null, null);
         insert new List<Message_Queue__c>{ b1, b2, single };
@@ -664,8 +660,7 @@ Add to `GeocodeBatchTest`:
         resp.setStatusCode(200);
         resp.setBody(csv);
 
-        Message_Queue__c msg = MessageQueueService.buildBatchMessage(
-            new List<Id>{ matched.Id, missing.Id }, 'irrelevant');
+        Message_Queue__c msg = MessageQueueService.buildBatchMessage('irrelevant');
 
         Test.startTest();
         new GeocodeBatchResponseHandler().handle(msg, resp);
@@ -696,7 +691,7 @@ Add to `GeocodeBatchTest`:
         HttpResponse resp = new HttpResponse();
         resp.setStatusCode(500);
         resp.setBody('error');
-        Message_Queue__c msg = MessageQueueService.buildBatchMessage(new List<Id>{ r.Id }, 'x');
+        Message_Queue__c msg = MessageQueueService.buildBatchMessage('x');
         msg.Status__c = 'Processing';
 
         new GeocodeBatchResponseHandler().handle(msg, resp);
@@ -901,7 +896,7 @@ Add to `GeocodeBatchTest`:
         insert r;
         // Simulate a permanently-failed batch whose CSV references this request.
         String csv = r.Id + ',1 Main St,Town,MD,20814';
-        Message_Queue__c failed = MessageQueueService.buildBatchMessage(new List<Id>{ r.Id }, csv);
+        Message_Queue__c failed = MessageQueueService.buildBatchMessage(csv);
         failed.Status__c = 'Failed';
         insert failed;
         update new Geocode_Request__c(Id = r.Id, Geocode_Status__c = 'Queued');
@@ -992,12 +987,10 @@ public with sharing class GeocodeDispatcher implements Queueable {
                 for (Integer j = i; j < end; j++) {
                     chunk.add(pending[j]);
                 }
-                List<Id> ids = new List<Id>();
                 for (Geocode_Request__c r : chunk) {
-                    ids.add(r.Id);
                     toMark.add(new Geocode_Request__c(Id = r.Id, Geocode_Status__c = 'Queued'));
                 }
-                messages.add(MessageQueueService.buildBatchMessage(ids, buildCsv(chunk)));
+                messages.add(MessageQueueService.buildBatchMessage(buildCsv(chunk)));
             }
         }
 

@@ -45,7 +45,7 @@ limits, with sensible, explicit caps.
 | Addresses per batch callout | **1,000** |
 | Routing threshold | **2+** pending → batch; exactly 1 → single GET |
 | Batch callouts per Queueable execution | **1, then chain** |
-| Addresses dispatched per run | **25,000** (25 batches); remainder left `Pending` |
+| Addresses dispatched per run | **9,000** (9 batches); remainder self-chained to a fresh job (bounded by the 10,000 DML-rows-per-transaction limit) |
 
 ## Census batch service reference
 
@@ -179,9 +179,14 @@ This avoids needing a separate child-link field from request to batch message.
   Several slow batch calls in one transaction would exceed it, so each batch
   callout runs in its own chained transaction. Non-batch (single) messages remain
   cheap and are still processed in bulk per execution.
-- **25,000 addresses / dispatch run.** Bounds the dispatcher's SOQL/DML
-  footprint. Any Pending beyond the ceiling is left `Pending`, logged via
-  `System.debug` / a count, and picked up on the next dispatcher run.
+- **9,000 addresses / dispatch run.** Salesforce caps DML at **10,000 rows per
+  transaction**. Each dispatched request is marked `Queued` (one DML row), so the
+  per-run ceiling must stay under 10,000 with headroom for the batch-message
+  inserts and the reaper's own (bounded) DML. When a run hits the ceiling the
+  dispatcher self-chains a fresh Queueable to continue, so total throughput is
+  unbounded across chained transactions. A periodic scheduled sweep
+  (`GeocodeDispatcher` is also `Schedulable`) provides a safety-net that picks up
+  any stragglers and runs the reaper even when no new requests are being inserted.
 
 ## Error handling
 
