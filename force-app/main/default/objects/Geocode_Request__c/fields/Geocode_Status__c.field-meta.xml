@@ -16,6 +16,11 @@
                 <label>Pending</label>
             </value>
             <value>
+                <fullName>Queued</fullName>
+                <default>false</default>
+                <label>Queued</label>
+            </value>
+            <value>
                 <fullName>Matched</fullName>
                 <default>false</default>
                 <label>Matched</label>

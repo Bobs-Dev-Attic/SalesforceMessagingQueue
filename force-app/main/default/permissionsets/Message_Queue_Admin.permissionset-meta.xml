@@ -87,6 +87,11 @@
         <readable>true</readable>
         <editable>true</editable>
     </fieldPermissions>
+    <fieldPermissions>
+        <field>Message_Queue__c.Is_Batch__c</field>
+        <readable>true</readable>
+        <editable>true</editable>
+    </fieldPermissions>
     <classAccesses>
         <apexClass>MessageQueueService</apexClass>
         <enabled>true</enabled>
