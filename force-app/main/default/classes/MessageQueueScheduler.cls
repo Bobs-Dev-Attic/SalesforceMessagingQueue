@@ -1,10 +1,11 @@
 /**
- * Scheduled entry point that drives the message queue on a ~60-second cadence.
+ * Scheduled entry point that drives the message queue once per hour.
  *
  * Run MessageQueueScheduler.start() once (e.g. from anonymous Apex or a post-install
  * script) to register a single Scheduled Apex job whose CRON expression fires at the
- * top of every minute. 60 seconds is the finest interval the platform scheduler
- * supports reliably; sub-minute delivery is not offered by the Apex scheduler.
+ * top of every hour. Scheduled Apex requires integer seconds/minutes in its CRON
+ * expression, so a single job cannot fire sub-hourly; for finer cadence register
+ * multiple offset jobs or use a self-rescheduling pattern.
  *
  * On each tick it does cheap, synchronous work only: claim a batch of eligible
  * messages (flipping them to 'Processing') and hand the actual HTTP callouts to a
@@ -13,9 +14,11 @@
  */
 public with sharing class MessageQueueScheduler implements Schedulable {
 
-    // second minute hour day-of-month month day-of-week  -> every minute, on the minute.
-    public static final String EVERY_MINUTE_CRON = '0 * * * * ?';
-    public static final String JOB_NAME = 'Message Queue Processor (every 60s)';
+    // sec min hour day-of-month month day-of-week -> top of every hour.
+    // Salesforce Scheduled Apex requires integer seconds/minutes (no '*'), so a single
+    // cron job cannot fire sub-hourly; hourly is the finest single-job cadence.
+    public static final String HOURLY_CRON = '0 0 * * * ?';
+    public static final String JOB_NAME = 'Message Queue Processor (hourly)';
 
     // Messages claimed per tick. Bounds the Queueable inside the 100 callouts /
     // transaction governor limit; surplus work is picked up next tick or via chaining.
@@ -48,7 +51,7 @@ public with sharing class MessageQueueScheduler implements Schedulable {
      * idempotent restart should call stop() first.
      */
     public static Id start() {
-        return System.schedule(JOB_NAME, EVERY_MINUTE_CRON, new MessageQueueScheduler());
+        return System.schedule(JOB_NAME, HOURLY_CRON, new MessageQueueScheduler());
     }
 
     /** Abort any scheduled instance(s) of this job. Safe to call when none exist. */

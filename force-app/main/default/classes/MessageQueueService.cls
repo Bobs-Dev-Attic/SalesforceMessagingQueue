@@ -99,7 +99,10 @@ public with sharing class MessageQueueService {
      */
     public static List<Message_Queue__c> claimPending(Integer limitSize) {
         Datetime now = System.now();
-        List<Message_Queue__c> toClaim = [
+        // SOQL forbids ORDER BY together with FOR UPDATE (lock order is implied by Id).
+        // Two-step claim: (1) pick the highest-priority eligible rows in order, then
+        // (2) lock those specific rows for the atomic status flip.
+        List<Message_Queue__c> candidates = [
             SELECT Id
             FROM Message_Queue__c
             WHERE Status__c IN ('Pending', 'Retry')
@@ -107,6 +110,16 @@ public with sharing class MessageQueueService {
               AND (Next_Attempt_At__c = null OR Next_Attempt_At__c <= :now)
             ORDER BY Priority__c ASC NULLS LAST, Scheduled_At__c ASC NULLS FIRST, CreatedDate ASC
             LIMIT :limitSize
+        ];
+        if (candidates.isEmpty()) {
+            return new List<Message_Queue__c>();
+        }
+        Set<Id> candidateIds = new Map<Id, Message_Queue__c>(candidates).keySet();
+        List<Message_Queue__c> toClaim = [
+            SELECT Id
+            FROM Message_Queue__c
+            WHERE Id IN :candidateIds
+              AND Status__c IN ('Pending', 'Retry')
             FOR UPDATE
         ];
         for (Message_Queue__c m : toClaim) {
@@ -215,12 +228,38 @@ public with sharing class MessageQueueService {
         if (String.isBlank(message.Payload__c)) {
             throw new MessageQueueException('Message ' + message.Id + ' has an empty payload.');
         }
-        MessagePayload payload;
+        // Parse untyped: MessagePayload.body is declared as Object (it may be a JSON
+        // object, array, string, ...), and Apex's strongly-typed JSON.deserialize
+        // cannot bind a JSON value into an Object-typed field. Map fields by hand.
+        Map<String, Object> raw;
         try {
-            payload = (MessagePayload) JSON.deserialize(message.Payload__c, MessagePayload.class);
+            raw = (Map<String, Object>) JSON.deserializeUntyped(message.Payload__c);
         } catch (Exception e) {
             throw new MessageQueueException('Message ' + message.Id + ' payload is not valid JSON: ' + e.getMessage());
         }
+
+        MessagePayload payload = new MessagePayload();
+        payload.method = (String) raw.get('method');
+        payload.endpoint = (String) raw.get('endpoint');
+        payload.body = raw.get('body');
+        payload.responseHandler = (String) raw.get('responseHandler');
+        if (raw.get('timeout') != null) {
+            payload.timeout = ((Decimal) raw.get('timeout')).intValue();
+        }
+        if (raw.get('headers') instanceof Map<String, Object>) {
+            payload.headers = new Map<String, String>();
+            Map<String, Object> rawHeaders = (Map<String, Object>) raw.get('headers');
+            for (String key : rawHeaders.keySet()) {
+                payload.headers.put(key, String.valueOf(rawHeaders.get(key)));
+            }
+        }
+        if (raw.get('successStatusCodes') instanceof List<Object>) {
+            payload.successStatusCodes = new List<Integer>();
+            for (Object code : (List<Object>) raw.get('successStatusCodes')) {
+                payload.successStatusCodes.add(((Decimal) code).intValue());
+            }
+        }
+
         if (String.isBlank(payload.endpoint)) {
             throw new MessageQueueException('Message ' + message.Id + ' payload is missing "endpoint".');
         }

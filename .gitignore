@@ -1,0 +1,9 @@
+# Salesforce CLI / local dev artifacts
+.sf/
+.sfdx/
+.vscode/
+
+# Deploy/test scratch output
+deploy_result.json
+test_result.json
+*.apex.log
