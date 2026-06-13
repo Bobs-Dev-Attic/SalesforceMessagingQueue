@@ -12,11 +12,18 @@
  *
  * Also reaps requests left stuck in 'Queued' by a permanently-Failed batch message,
  * resetting them to 'Error'.
+ *
+ * A companion Schedulable, GeocodeDispatcherScheduler, can be scheduled as a periodic
+ * safety-net sweep so stragglers get dispatched and failed batches get reaped even when
+ * no new requests are being inserted.
  */
 public with sharing class GeocodeDispatcher implements Queueable {
 
     @TestVisible private static final Integer BATCH_SIZE = 1000;
-    @TestVisible private static final Integer MAX_PER_RUN = 25000;
+    // Bounded by the 10,000 DML-rows-per-transaction limit: each dispatched request
+    // is marked 'Queued' (1 DML row), plus batch-message inserts and the reaper's
+    // own (bounded) DML must also fit. The dispatcher self-chains past this ceiling.
+    @TestVisible private static final Integer MAX_PER_RUN = 9000;
     private static final String SINGLE_BASE =
         'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress';
 
@@ -53,6 +60,9 @@ public with sharing class GeocodeDispatcher implements Queueable {
                     new Map<String, String>{ 'Accept' => 'application/json' },
                     'CensusGeocodeResponseHandler', r.Id));
                 toMark.add(new Geocode_Request__c(Id = r.Id, Geocode_Status__c = 'Queued'));
+            } else {
+                // No usable address: mark Error so it isn't re-selected as Pending forever.
+                toMark.add(new Geocode_Request__c(Id = r.Id, Geocode_Status__c = 'Error'));
             }
         } else {
             for (Integer i = 0; i < pending.size(); i += BATCH_SIZE) {
@@ -70,6 +80,8 @@ public with sharing class GeocodeDispatcher implements Queueable {
 
         if (!messages.isEmpty()) {
             insert messages;
+        }
+        if (!toMark.isEmpty()) {
             update toMark;
         }
 
@@ -131,7 +143,8 @@ public with sharing class GeocodeDispatcher implements Queueable {
         for (Message_Queue__c m : [
             SELECT Payload__c FROM Message_Queue__c
             WHERE Is_Batch__c = true AND Status__c = 'Failed'
-            LIMIT 200
+            ORDER BY CreatedDate ASC
+            LIMIT 50
         ]) {
             suspectIds.addAll(requestIdsFromPayload(m.Payload__c));
         }
@@ -142,6 +155,7 @@ public with sharing class GeocodeDispatcher implements Queueable {
         for (Geocode_Request__c r : [
             SELECT Id FROM Geocode_Request__c
             WHERE Id IN :suspectIds AND Geocode_Status__c = 'Queued'
+            LIMIT 500
         ]) {
             toError.add(new Geocode_Request__c(Id = r.Id, Geocode_Status__c = 'Error'));
         }

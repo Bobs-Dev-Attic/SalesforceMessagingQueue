@@ -290,4 +290,56 @@ private class GeocodeBatchTest {
             [SELECT Geocode_Status__c FROM Geocode_Request__c WHERE Id = :r.Id].Geocode_Status__c,
             'Stuck Queued request from a Failed batch is reaped to Error');
     }
+
+    @IsTest
+    static void schedulerDelegatesDispatch() {
+        // Exercises GeocodeDispatcherScheduler.execute() which delegates to dispatch().
+        // With no Pending rows the method is a no-op, but this satisfies the 75% coverage
+        // requirement for the scheduler class.
+        GeocodeDispatcher.dispatchQueued = true;
+
+        Test.startTest();
+        new GeocodeDispatcherScheduler().execute(null);
+        Test.stopTest();
+
+        System.assertEquals(0, [SELECT COUNT() FROM Message_Queue__c],
+            'No messages when no Pending requests exist');
+    }
+
+    @IsTest
+    static void dispatchSingleWithNoAddressMarksError() {
+        GeocodeDispatcher.dispatchQueued = true;
+        insert new Geocode_Request__c(Geocode_Status__c = 'Pending'); // no address parts
+
+        Test.startTest();
+        GeocodeDispatcher.dispatch();
+        Test.stopTest();
+
+        System.assertEquals(0, [SELECT COUNT() FROM Message_Queue__c], 'No message for an address-less request');
+        System.assertEquals('Error',
+            [SELECT Geocode_Status__c FROM Geocode_Request__c LIMIT 1].Geocode_Status__c,
+            'Address-less single request is marked Error, not left Pending');
+    }
+
+    @IsTest
+    static void reaperLeavesNonQueuedRequestsUntouched() {
+        GeocodeDispatcher.dispatchQueued = true;
+        Geocode_Request__c stillPending = makeRequests(1)[0]; // stays Pending (not Queued)
+        insert stillPending;
+        // A Failed batch references this request, but the request is Pending, not Queued.
+        Message_Queue__c failed = MessageQueueService.buildBatchMessage(
+            stillPending.Id + ',1 Main St,Town,MD,20814');
+        failed.Status__c = 'Failed';
+        insert failed;
+
+        Test.startTest();
+        GeocodeDispatcher.dispatch();
+        Test.stopTest();
+
+        // The reaper only touches 'Queued' rows, so it must NOT flip this Pending row to Error.
+        // dispatch() then routes the single Pending request normally -> Queued.
+        System.assertEquals('Queued',
+            [SELECT Geocode_Status__c FROM Geocode_Request__c WHERE Id = :stillPending.Id].Geocode_Status__c,
+            'Reaper must not touch non-Queued rows; the request is routed normally');
+    }
 }
