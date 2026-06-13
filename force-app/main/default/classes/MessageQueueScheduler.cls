@@ -46,7 +46,7 @@ public with sharing class MessageQueueScheduler implements Schedulable {
     }
 
     /**
-     * Register the every-60-second job. Returns the CronTrigger Id. If a job with
+     * Register the hourly job. Returns the CronTrigger Id. If a job with
      * the same name already exists the platform throws; callers wanting an
      * idempotent restart should call stop() first.
      */

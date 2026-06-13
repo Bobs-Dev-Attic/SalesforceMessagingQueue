@@ -101,7 +101,7 @@ Geocode_Request__c set to Matched / No_Match / Error  →  Geocode Post Processi
 
 2. **`GeocodeDispatcher`** (new, `Queueable`)
    - Queries `Geocode_Request__c WHERE Geocode_Status__c = 'Pending'`
-     (ordered, `LIMIT` the per-run ceiling = 25,000).
+     (ordered, `LIMIT` the per-run ceiling = 9,000).
    - If exactly 1 → build a single `GET` message (existing path/handler).
    - If 2+ → split into chunks of ≤1,000; for each chunk, build the CSV
      (`Id,Street,City,State,Zip` per row) and a batch message.
@@ -205,8 +205,9 @@ duplicate work.
 
 **Unit (Apex tests, `HttpCalloutMock`):**
 - Dispatcher routing: 1 pending → single GET message; 2 pending → one batch
-  message; 1,500 pending → two batch messages (1,000 + 500); 25,001 pending →
-  exactly 25 batches dispatched, 1 left Pending.
+  message; 1,500 pending → two batch messages (1,000 + 500); 9,000 pending →
+  exactly 9 batches dispatched in one run, with a fresh job self-chained for any
+  remainder.
 - Multipart body construction: correct boundary, field parts, file part with CSV.
 - `CsvUtil.parseLine`: plain row, quoted field with embedded comma, empty fields.
 - `GeocodeBatchResponseHandler`: sample Census CSV with Match / No_Match / Tie /
