@@ -77,6 +77,41 @@ A `Message_Queue_Admin` permission set grants full access to the object and engi
 | `AccountSyncResponseHandler` | Example handler (treats 409 as success, captures remote id). |
 | `MessageQueueTrigger` | Guards `Message_Queue__c`: defaults + payload validation. |
 | `AccountToMessageQueueTrigger` | **Example producer** — enqueues a message when an Account is created/renamed. |
+| `GeocodeRequestTrigger` / `CensusGeocodeResponseHandler` | **Census geocoding example** — enqueue a geocode call and write the result back to `Geocode_Request__c`. |
+
+## Worked example: Census geocoding
+
+A self-contained example geocodes an address via the public
+[U.S. Census Geocoder](https://geocoding.geo.census.gov/geocoder/) and feeds the
+result into a Flow:
+
+1. Insert a **`Geocode_Request__c`** (Street/City/State/ZIP). It defaults to `Pending`.
+2. **`GeocodeRequestTrigger`** enqueues a `GET` to
+   `…/geocoder/locations/onelineaddress?address=…&benchmark=Public_AR_Current&format=json`,
+   routed to `CensusGeocodeResponseHandler`.
+3. ~60 s later the processor calls Census, and **`CensusGeocodeResponseHandler`**
+   writes the coordinates (`Location__c`), `Matched_Address__c`, raw
+   `Geocode_Response__c`, and sets `Geocode_Status__c = Matched` (or `No_Match` / `Error`).
+4. That status change fires the **`Geocode Post Processing`** record-triggered flow,
+   the hook for your downstream logic (it ships marking `Post_Processing_Complete__c`).
+
+```
+Geocode_Request__c (Pending)
+  → GeocodeRequestTrigger → Message_Queue__c
+  → [60s] MessageQueueProcessor → Census API
+  → CensusGeocodeResponseHandler writes Location/Status back
+  → "Geocode Post Processing" flow runs
+```
+
+Census is key-less and called by absolute URL, so the **`Census Geocoder` Remote
+Site Setting** (included) must be active. To try it:
+
+```apex
+insert new Geocode_Request__c(
+    Street__c = '1600 Pennsylvania Ave NW',
+    City__c   = 'Washington', State__c = 'DC', Zip__c = '20500'
+);
+```
 
 ## Why 60 seconds (and not less)
 

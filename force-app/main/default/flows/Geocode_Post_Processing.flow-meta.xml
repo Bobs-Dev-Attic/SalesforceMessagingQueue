@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>60.0</apiVersion>
+    <description>EXAMPLE post-processing flow. Runs when a Geocode_Request__c reaches the Matched status (coordinates written by CensusGeocodeResponseHandler). Replace the Update element with your real post-processing; the entry condition prevents re-triggering.</description>
+    <environments>Default</environments>
+    <interviewLabel>Geocode Post Processing {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Geocode Post Processing</label>
+    <processType>AutoLaunchedFlow</processType>
+    <recordUpdates>
+        <name>Mark_Post_Processing_Complete</name>
+        <label>Mark Post Processing Complete</label>
+        <locationX>176</locationX>
+        <locationY>134</locationY>
+        <inputAssignments>
+            <field>Post_Processing_Complete__c</field>
+            <value>
+                <booleanValue>true</booleanValue>
+            </value>
+        </inputAssignments>
+        <inputReference>$Record</inputReference>
+    </recordUpdates>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Mark_Post_Processing_Complete</targetReference>
+        </connector>
+        <filterLogic>and</filterLogic>
+        <filters>
+            <field>Geocode_Status__c</field>
+            <operator>EqualTo</operator>
+            <value>
+                <stringValue>Matched</stringValue>
+            </value>
+        </filters>
+        <filters>
+            <field>Post_Processing_Complete__c</field>
+            <operator>EqualTo</operator>
+            <value>
+                <booleanValue>false</booleanValue>
+            </value>
+        </filters>
+        <object>Geocode_Request__c</object>
+        <recordTriggerType>CreateAndUpdate</recordTriggerType>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+    <status>Active</status>
+</Flow>

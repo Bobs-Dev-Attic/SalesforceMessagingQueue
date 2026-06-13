@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RemoteSiteSetting xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Allows callouts to the U.S. Census Geocoder API (used by CensusGeocodeResponseHandler / GeocodeRequestTrigger).</description>
+    <disableProtocolSecurity>false</disableProtocolSecurity>
+    <isActive>true</isActive>
+    <url>https://geocoding.geo.census.gov</url>
+</RemoteSiteSetting>
