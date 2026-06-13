@@ -104,7 +104,7 @@ public with sharing class MessageQueueService {
      * multipart/form-data. The CSV's first column is the Geocode_Request__c Id,
      * which the response echoes back so results map straight to the records.
      */
-    public static Message_Queue__c buildBatchMessage(List<Id> requestIds, String csv) {
+    public static Message_Queue__c buildBatchMessage(String csv) {
         MessagePayload payload = new MessagePayload();
         payload.method = 'POST';
         payload.endpoint = CENSUS_BATCH_ENDPOINT;
@@ -379,6 +379,7 @@ public with sharing class MessageQueueService {
      * (CSV), so a plain string body is sufficient; no base64 byte-alignment is
      * needed (that trick only matters when embedding binary file parts).
      */
+    @TestVisible
     private static String buildMultipartBody(MultipartUpload mu, String boundary) {
         String CRLF = '\r\n';
         String body = '';

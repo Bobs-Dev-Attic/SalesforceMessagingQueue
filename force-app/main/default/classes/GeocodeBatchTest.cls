@@ -40,9 +40,8 @@ private class GeocodeBatchTest {
     // ---- buildBatchMessage + multipart payload --------------------------
     @IsTest
     static void buildBatchMessageProducesMultipartPayload() {
-        List<Id> ids = new List<Id>{ '001000000000001AAA', '001000000000002AAA' };
         String csv = '001000000000001AAA,4550 Montgomery Ave,Bethesda,MD,20814';
-        Message_Queue__c m = MessageQueueService.buildBatchMessage(ids, csv);
+        Message_Queue__c m = MessageQueueService.buildBatchMessage(csv);
 
         System.assertEquals('POST', m.HTTP_Method__c);
         System.assertEquals(true, m.Is_Batch__c, 'Batch messages must be flagged');
@@ -55,14 +54,39 @@ private class GeocodeBatchTest {
 
     @IsTest
     static void multipartPayloadRoundTripsThroughParse() {
-        List<Id> ids = new List<Id>{ '001000000000001AAA' };
         String csv = '001000000000001AAA,4550 Montgomery Ave,Bethesda,MD,20814';
-        Message_Queue__c m = MessageQueueService.buildBatchMessage(ids, csv);
+        Message_Queue__c m = MessageQueueService.buildBatchMessage(csv);
 
         MessageQueueService.MessagePayload p = MessageQueueService.parsePayload(m);
         System.assertNotEquals(null, p.multipart, 'multipart block should survive serialize/parse');
         System.assertEquals('addressFile', p.multipart.fileFieldName);
         System.assertEquals(csv, p.multipart.fileContent);
         System.assertEquals('Public_AR_Current', p.multipart.formFields.get('benchmark'));
+    }
+
+    @IsTest
+    static void multipartBodyIsWellFormed() {
+        MessageQueueService.MultipartUpload mu = new MessageQueueService.MultipartUpload();
+        mu.fileFieldName = 'addressFile';
+        mu.fileName = 'addresses.csv';
+        mu.fileContent = 'id1,4550 Montgomery Ave,Bethesda,MD,20814';
+        mu.formFields = new Map<String, String>{ 'benchmark' => 'Public_AR_Current' };
+
+        String boundary = '----TestBoundary';
+        String body = MessageQueueService.buildMultipartBody(mu, boundary);
+
+        // Form-field part comes first
+        System.assert(body.contains('--' + boundary + '\r\nContent-Disposition: form-data; name="benchmark"\r\n\r\nPublic_AR_Current\r\n'),
+            'benchmark form field part malformed: ' + body);
+        // File part with filename + content type
+        System.assert(body.contains('Content-Disposition: form-data; name="addressFile"; filename="addresses.csv"\r\n'),
+            'file part disposition malformed: ' + body);
+        System.assert(body.contains('Content-Type: text/csv\r\n\r\n'),
+            'file part content-type/blank-line malformed: ' + body);
+        System.assert(body.contains('id1,4550 Montgomery Ave,Bethesda,MD,20814\r\n'),
+            'file content missing: ' + body);
+        // Closing delimiter
+        System.assert(body.endsWith('--' + boundary + '--\r\n'),
+            'closing boundary malformed: ' + body);
     }
 }
