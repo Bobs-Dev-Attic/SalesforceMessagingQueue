@@ -198,4 +198,96 @@ private class GeocodeBatchTest {
         System.assertEquals(true,
             [SELECT Is_Batch__c FROM Message_Queue__c WHERE Id = :second[0].Id].Is_Batch__c);
     }
+
+    // ---- GeocodeDispatcher routing -------------------------------------
+    private static List<Geocode_Request__c> makeRequests(Integer n) {
+        List<Geocode_Request__c> reqs = new List<Geocode_Request__c>();
+        for (Integer i = 0; i < n; i++) {
+            reqs.add(new Geocode_Request__c(
+                Street__c = i + ' Main St', City__c = 'Town', State__c = 'MD',
+                Zip__c = '20814', Geocode_Status__c = 'Pending'));
+        }
+        return reqs;
+    }
+
+    @IsTest
+    static void triggerEnqueuesDispatcherAndDispatches() {
+        // No suppression: the after-insert trigger enqueues a real GeocodeDispatcher
+        // Queueable, which runs at Test.stopTest() and produces the routed message.
+        Test.startTest();
+        insert makeRequests(1);
+        Test.stopTest();
+
+        System.assertEquals(1, [SELECT COUNT() FROM Message_Queue__c],
+            'Trigger-enqueued dispatcher should produce one message');
+        System.assertEquals(1, [SELECT COUNT() FROM Geocode_Request__c WHERE Geocode_Status__c = 'Queued'],
+            'Dispatched request flipped to Queued');
+    }
+
+    @IsTest
+    static void dispatchSingleUsesGetPath() {
+        // Suppress the trigger's auto-enqueue; dispatch manually for a deterministic test.
+        GeocodeDispatcher.dispatchQueued = true;
+        insert makeRequests(1);
+
+        Test.startTest();
+        GeocodeDispatcher.dispatch();
+        Test.stopTest();
+
+        List<Message_Queue__c> msgs = [SELECT Is_Batch__c, HTTP_Method__c, Response_Handler__c FROM Message_Queue__c];
+        System.assertEquals(1, msgs.size());
+        System.assertEquals(false, msgs[0].Is_Batch__c, 'Single request -> single GET message');
+        System.assertEquals('GET', msgs[0].HTTP_Method__c);
+        System.assertEquals('CensusGeocodeResponseHandler', msgs[0].Response_Handler__c);
+        System.assertEquals(1, [SELECT COUNT() FROM Geocode_Request__c WHERE Geocode_Status__c = 'Queued']);
+    }
+
+    @IsTest
+    static void dispatchManyChunksIntoBatches() {
+        GeocodeDispatcher.dispatchQueued = true;
+        insert makeRequests(1500); // -> two batches: 1000 + 500
+
+        Test.startTest();
+        GeocodeDispatcher.dispatch();
+        Test.stopTest();
+
+        List<Message_Queue__c> batches = [SELECT Id FROM Message_Queue__c WHERE Is_Batch__c = true];
+        System.assertEquals(2, batches.size(), '1500 requests -> two batch messages (1000 + 500)');
+        System.assertEquals(0, [SELECT COUNT() FROM Message_Queue__c WHERE Is_Batch__c = false]);
+        System.assertEquals(1500, [SELECT COUNT() FROM Geocode_Request__c WHERE Geocode_Status__c = 'Queued']);
+    }
+
+    @IsTest
+    static void dispatchTwoUsesBatchPath() {
+        GeocodeDispatcher.dispatchQueued = true;
+        insert makeRequests(2);
+
+        Test.startTest();
+        GeocodeDispatcher.dispatch();
+        Test.stopTest();
+
+        System.assertEquals(1, [SELECT COUNT() FROM Message_Queue__c WHERE Is_Batch__c = true],
+            '2 requests -> one batch message');
+    }
+
+    @IsTest
+    static void reaperResetsStuckQueuedRequestsFromFailedBatch() {
+        GeocodeDispatcher.dispatchQueued = true;
+        Geocode_Request__c r = makeRequests(1)[0];
+        insert r;
+        // Simulate a permanently-failed batch whose CSV references this request.
+        String csv = r.Id + ',1 Main St,Town,MD,20814';
+        Message_Queue__c failed = MessageQueueService.buildBatchMessage(csv);
+        failed.Status__c = 'Failed';
+        insert failed;
+        update new Geocode_Request__c(Id = r.Id, Geocode_Status__c = 'Queued');
+
+        Test.startTest();
+        GeocodeDispatcher.dispatch(); // runs the reaper first
+        Test.stopTest();
+
+        System.assertEquals('Error',
+            [SELECT Geocode_Status__c FROM Geocode_Request__c WHERE Id = :r.Id].Geocode_Status__c,
+            'Stuck Queued request from a Failed batch is reaped to Error');
+    }
 }
