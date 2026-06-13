@@ -152,6 +152,28 @@ private class GeocodeBatchTest {
             [SELECT Geocode_Status__c FROM Geocode_Request__c WHERE Id = :r.Id].Geocode_Status__c);
     }
 
+    @IsTest
+    static void batchHandlerTreatsTieAsNoMatch() {
+        Geocode_Request__c r = new Geocode_Request__c(
+            Street__c = 'Ambiguous', City__c = 'Y', State__c = 'YY', Zip__c = '22222',
+            Geocode_Status__c = 'Queued');
+        insert r;
+        // Census returns a 3-column row with "Tie" and no coordinates for ambiguous matches.
+        String csv = '"' + r.Id + '","Ambiguous, Y, YY, 22222","Tie"';
+        HttpResponse resp = new HttpResponse();
+        resp.setStatusCode(200);
+        resp.setBody(csv);
+
+        new GeocodeBatchResponseHandler().handle(MessageQueueService.buildBatchMessage('x'), resp);
+
+        Geocode_Request__c out = [
+            SELECT Geocode_Status__c, Location__Latitude__s
+            FROM Geocode_Request__c WHERE Id = :r.Id
+        ];
+        System.assertEquals('No_Match', out.Geocode_Status__c, 'Tie has no single coordinate; treated as No_Match');
+        System.assertEquals(null, out.Location__Latitude__s);
+    }
+
     // ---- Heavy-aware claiming ------------------------------------------
     @IsTest
     static void claimReturnsAtMostOneBatchAndPrefersSingles() {

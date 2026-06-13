@@ -7,6 +7,9 @@
  *   ID, Input Address, Match Indicator, Match Type, Matched Address,
  *   Coordinates ("longitude,latitude"), TIGER Line ID, Side
  *
+ * A 'Tie' indicator (address matched multiple candidates ambiguously) carries no
+ * coordinates from the batch API, so it is recorded as 'No_Match'.
+ *
  * On a non-2xx response it leaves message.Status__c as 'Processing' so the queue
  * engine applies its retry/backoff policy to the whole batch.
  */
@@ -24,11 +27,12 @@ public with sharing class GeocodeBatchResponseHandler implements MessageQueueRes
             return;
         }
 
-        for (String line : body.split('\n')) {
+        for (String rawLine : body.split('\n')) {
+            String line = rawLine == null ? '' : rawLine.trim(); // tolerate CRLF line endings
             if (String.isBlank(line)) {
                 continue;
             }
-            List<String> cols = CsvUtil.parseLine(line.trim());
+            List<String> cols = CsvUtil.parseLine(line);
             if (cols.size() < 3) {
                 continue;
             }
